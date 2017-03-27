@@ -26,6 +26,7 @@
 			table{
 				border-collapse: collapse;
 				margin: 10px;
+				width: 400px;
 			}
 
 			td{
@@ -41,11 +42,25 @@
 			}
 
 			canvas{
-				background-color: rgb(200, 200, 200);
+				background-color: rgb(0, 0, 0);
 			}
 
 			#canvasContainer{
 				width: 100%;
+			}
+
+			#info{
+				display: flex;
+			}
+
+			#oscilloscope{
+				flex-grow: 1;
+			}
+
+			#micDistance{
+				max-width: 65px;
+				border: 1px #CCCCCC solid;
+				font-size: 16px;
 			}
 
 			#labels{
@@ -96,7 +111,35 @@
 		<div id="canvasContainer">
 			<canvas id="canvas"></canvas>
 		</div>
-		<div id="output"></div>
+		<div id="info">
+			<div id="output">
+				<table>
+					<tbody>
+						<tr>
+							<td>Microphone distance</td>
+							<td><input type="number" value="0" id="micDistance" step="0.5"> mm</td>
+						</tr>
+						<tr>
+							<td>Maximum possible delay</td>
+							<td><span id="eMaxDelay"></span> s</td>
+						</tr>
+						<tr>
+							<td>Sample rate</td>
+							<td><span id="eSampleRate"></span> Hz</td>
+						</tr>
+						<tr>
+							<td>Maximum delay</td>
+							<td><span id="maxDelaySamples"></span> samples</td>
+						</tr>
+						<tr>
+							<td>Highest detectable frequency</td>
+							<td><span id="eHightestFrequency"></span> Hz</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
+			<canvas id="oscilloscope"></canvas>
+		</div>
 		
 		<script type="text/javascript">
 
@@ -114,12 +157,34 @@
 			var div = document.getElementById("output");
 			var canvasContainer = document.getElementById("canvasContainer");
 
-			div.innerHTML = "<table><tr><td>Microphone distance</td><td>"+microphoneDistance
-				+" mm</td></tr><tr><td>Maximum possible delay</td><td>±"+maximumDelay
+			document.getElementById("micDistance").value = microphoneDistance;
+			document.getElementById("eMaxDelay").innerHTML = Math.round(maximumDelay*1000000)/1000000;
+			document.getElementById("eSampleRate").innerHTML = sampleRate;
+			document.getElementById("maxDelaySamples").innerHTML = maximumSamplesDelay;
+			document.getElementById("eHightestFrequency").innerHTML = Math.round(cutoffFrequency*100)/100;
+
+			/*div.innerHTML = "<table><tr><td>Microphone distance</td><td><input type=\"number\" value=\""+microphoneDistance
+				+"\" id=\"micDistance\" step=\"0.5\"> mm</td></tr><tr><td>Maximum possible delay</td><td>±"+maximumDelay
 				+" s</td></tr><tr><td>Sample rate</td><td>"+sampleRate
 				+" Hz</td></tr><tr><td>Maximum delay</td><td>±"+maximumSamplesDelay
-				+" samples</td></tr><tr><td>Cutoff frequency</td><td>"+cutoffFrequency
-				+" Hz</td></tr></table>";
+				+" samples</td></tr><tr><td>Highest detectable frequency</td><td>"+cutoffFrequency
+				+" Hz</td></tr></table>";*/
+		
+			var micDistanceInput = document.getElementById("micDistance");
+			
+			micDistanceInput.oninput = function(){
+				console.log(micDistanceInput.value);
+				microphoneDistance = micDistanceInput.value * 1.0; //mm
+				maximumDelay = microphoneDistance/speedOfSound;
+				maximumSamplesDelay = Math.ceil(maximumDelay/(1/sampleRate));
+				cutoffFrequency = (speedOfSound/microphoneDistance)/4;
+
+				document.getElementById("micDistance").value = microphoneDistance;
+				document.getElementById("eMaxDelay").innerHTML = Math.round(maximumDelay*1000000)/1000000;
+				document.getElementById("eSampleRate").innerHTML = sampleRate;
+				document.getElementById("maxDelaySamples").innerHTML = maximumSamplesDelay;
+				document.getElementById("eHightestFrequency").innerHTML = Math.round(cutoffFrequency*100)/100;
+			};
 
 			var canvas = document.getElementById("canvas");
 			canvas.width = canvasContainer.clientWidth;
@@ -127,12 +192,19 @@
 			canvas.height = 400;
 			var canvasCtx = canvas.getContext("2d");
 
+			var oscilloscope = document.getElementById("oscilloscope");
+			oscilloscope.width = oscilloscope.clientWidth;
+			oscilloscope.height = oscilloscope.clientHeight;
+			var oscilloCtx = oscilloscope.getContext("2d");
+
 			setTimeout(function(){
 				canvas.width = canvasContainer.clientWidth;
 			}, 100);
 
 			window.onresize = function(){
 				canvas.width = canvasContainer.clientWidth;
+				oscilloscope.width = oscilloscope.clientWidth;
+				oscilloscope.height = oscilloscope.clientHeight;
 			}
 
 			navigator.mediaDevices.getUserMedia({audio: { mandatory: { echoCancellation: false}}}).then(function(stream) {
@@ -145,13 +217,23 @@
 				var filter = audioCtx.createBiquadFilter();
 				filter.type = "lowpass";
 				filter.frequency.value = cutoffFrequency;
+
+				var hfilter = audioCtx.createBiquadFilter();
+				filter.type = "highpass";
+				filter.frequency.value = 100;
 				//filter.Q.value = 100;
+
+				var gain = audioCtx.createGain();
+				gain.gain.value = 2;
 
 				var source = audioCtx.createMediaStreamSource(stream);
 				var splitter = audioCtx.createChannelSplitter(2);
 
+				//source.connect(splitter);
 				source.connect(filter);
-				filter.connect(splitter);
+				filter.connect(hfilter);
+				hfilter.connect(gain);
+				gain.connect(splitter);
 				splitter.connect(lAnalyser, 0);
 				splitter.connect(rAnalyser, 1);
 
@@ -174,7 +256,7 @@
 					lAnalyser.getByteTimeDomainData(lDataArray);
 					rAnalyser.getByteTimeDomainData(rDataArray);
 
-					canvasCtx.fillStyle = 'rgba(200, 200, 200, 0.1)';
+					canvasCtx.fillStyle = 'rgba(0, 0, 0, 0.2)';
 					canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
 
 					//var maxDelay = ~~(bufferLength/2);
@@ -201,9 +283,9 @@
 					//console.log(correlationSpan);
 					//console.log(correlation);
 
-					canvasCtx.lineWidth = Math.min(correlationSpan*10, 5);
+					canvasCtx.lineWidth = Math.min(correlationSpan*20, 5);
 
-					canvasCtx.strokeStyle = 'rgba(0, 0, 255, '+Math.min(correlationSpan*3, 1)+')';
+					canvasCtx.strokeStyle = 'rgba(0, 255, 0, '+Math.min(correlationSpan*10, 1)+')';
 
 					canvasCtx.beginPath();
 
@@ -226,54 +308,57 @@
 					}
 					
 					canvasCtx.stroke();
+
+					oscilloCtx.fillStyle = 'rgb(0, 0, 0)';
+					oscilloCtx.fillRect(0, 0, canvas.width, canvas.height);
 					
-					/*canvasCtx.strokeStyle = 'rgb(0, 0, 0)';
+					oscilloCtx.strokeStyle = 'rgb(0, 255, 0)';
 
-					canvasCtx.beginPath();
+					oscilloCtx.beginPath();
 
-					var sliceWidth = canvas.width * 1.0 / bufferLength;
+					var sliceWidth = oscilloscope.width * 1.0 / bufferLength;
 					var x = 0;
 
 					for (var i = 0; i < bufferLength; i++) {
 
 						var v = lDataArray[i] / 128.0;
-						var y = v * canvas.height / 2;
+						var y = v * oscilloscope.height / 2;
 
 						if (i === 0) {
-							canvasCtx.moveTo(x, y);
+							oscilloCtx.moveTo(x, y);
 						} else {
-							canvasCtx.lineTo(x, y);
+							oscilloCtx.lineTo(x, y);
 						}
 
 						x += sliceWidth;
 					}
 
-					canvasCtx.lineTo(canvas.width, canvas.height / 2);
-					canvasCtx.stroke();
+					oscilloCtx.lineTo(oscilloscope.width, oscilloscope.height / 2);
+					oscilloCtx.stroke();
 
-					canvasCtx.strokeStyle = 'rgb(255, 0, 0)';
+					oscilloCtx.strokeStyle = 'rgb(0, 255, 255)';
 
-					canvasCtx.beginPath();
+					oscilloCtx.beginPath();
 
-					var sliceWidth = canvas.width * 1.0 / bufferLength;
+					var sliceWidth = oscilloscope.width * 1.0 / bufferLength;
 					var x = 0;
 
 					for (var i = 0; i < bufferLength; i++) {
 
 						var v = rDataArray[i] / 128.0;
-						var y = v * canvas.height / 2;
+						var y = v * oscilloscope.height / 2;
 
 						if (i === 0) {
-							canvasCtx.moveTo(x, y);
+							oscilloCtx.moveTo(x, y);
 						} else {
-							canvasCtx.lineTo(x, y);
+							oscilloCtx.lineTo(x, y);
 						}
 
 						x += sliceWidth;
 					}
 
-					canvasCtx.lineTo(canvas.width, canvas.height / 2);
-					canvasCtx.stroke();*/
+					oscilloCtx.lineTo(oscilloscope.width, oscilloscope.height / 2);
+					oscilloCtx.stroke();
 
 					drawVisual = requestAnimationFrame(draw);
 				};
