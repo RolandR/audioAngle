@@ -1,0 +1,345 @@
+<!doctype html>
+<html allowfullscreen>
+	<head>
+		<meta charset="utf-8"> 
+		<title>
+			Microphone stuff
+		</title>
+
+		<style>
+			*{
+				margin: 0px;
+				padding: 0px;
+				border: none;
+				box-sizing: border-box;
+			}
+
+			html, body{
+				width: 100%;
+			}
+
+			body{
+				font-family: sans;
+				color: #333333;
+			}
+
+			table{
+				border-collapse: collapse;
+				margin: 10px;
+			}
+
+			td{
+				padding: 3px 10px 3px 0px;
+				border-bottom: 1px #CCCCCC solid;
+				border-collapse: none;
+				margin-right: -3px;
+			}
+
+			h1{
+				font-weight: 400;
+				margin: 10px 15px;
+			}
+
+			canvas{
+				background-color: rgb(200, 200, 200);
+			}
+
+			#canvasContainer{
+				width: 100%;
+			}
+
+			#labels{
+				/*position: absolute;
+				left: 0px;
+				right: 0px;*/
+				width: 100%;
+				display: flex;
+				justify-content: space-between;
+			}
+
+			#labels span{
+				text-align: center;
+				width: 100px;
+			}
+
+			/*#deg0{
+				left: 0%;
+			}
+
+			#deg45{
+				left: 25%;
+			}
+
+			#deg90{
+				left: 50%;
+			}
+
+			#deg135{
+				left: 70%;
+			}
+
+			#deg180{
+				left: 100%;
+			}*/
+			
+		</style>
+	</head>
+	<body>
+		<h1>Sound Source Angle</h1>
+		<div id="labels">
+			<span id="deg0">0°</span>
+			<span id="deg45">45°</span>
+			<span id="deg90">90°</span>
+			<span id="deg135">135°</span>
+			<span id="deg180">180°</span>
+		</div>
+		<div id="canvasContainer">
+			<canvas id="canvas"></canvas>
+		</div>
+		<div id="output"></div>
+		
+		<script type="text/javascript">
+
+			var microphoneDistance = 70; //mm
+			var speedOfSound = 340270; //mm/s
+
+			var maximumDelay = microphoneDistance/speedOfSound;
+			
+			var audioCtx = new(window.AudioContext || window.webkitAudioContext)();
+			var sampleRate = audioCtx.sampleRate;
+
+			var maximumSamplesDelay = Math.ceil(maximumDelay/(1/sampleRate));
+			var cutoffFrequency = (speedOfSound/microphoneDistance)/4;
+			
+			var div = document.getElementById("output");
+			var canvasContainer = document.getElementById("canvasContainer");
+
+			div.innerHTML = "<table><tr><td>Microphone distance</td><td>"+microphoneDistance
+				+" mm</td></tr><tr><td>Maximum possible delay</td><td>±"+maximumDelay
+				+" s</td></tr><tr><td>Sample rate</td><td>"+sampleRate
+				+" Hz</td></tr><tr><td>Maximum delay</td><td>±"+maximumSamplesDelay
+				+" samples</td></tr><tr><td>Cutoff frequency</td><td>"+cutoffFrequency
+				+" Hz</td></tr></table>";
+
+			var canvas = document.getElementById("canvas");
+			canvas.width = canvasContainer.clientWidth;
+			//console.log(canvasContainer.clientWidth);
+			canvas.height = 400;
+			var canvasCtx = canvas.getContext("2d");
+
+			setTimeout(function(){
+				canvas.width = canvasContainer.clientWidth;
+			}, 100);
+
+			window.onresize = function(){
+				canvas.width = canvasContainer.clientWidth;
+			}
+
+			navigator.mediaDevices.getUserMedia({audio: { mandatory: { echoCancellation: false}}}).then(function(stream) {
+
+				//console.log(stream);
+				
+				var audioCtx = new(window.AudioContext || window.webkitAudioContext)();
+				var lAnalyser = audioCtx.createAnalyser();
+				var rAnalyser = audioCtx.createAnalyser();
+				var filter = audioCtx.createBiquadFilter();
+				filter.type = "lowpass";
+				filter.frequency.value = cutoffFrequency;
+				//filter.Q.value = 100;
+
+				var source = audioCtx.createMediaStreamSource(stream);
+				var splitter = audioCtx.createChannelSplitter(2);
+
+				source.connect(filter);
+				filter.connect(splitter);
+				splitter.connect(lAnalyser, 0);
+				splitter.connect(rAnalyser, 1);
+
+				//source.connect(analyser);
+
+				// ...
+
+				lAnalyser.fftSize = 4096;
+				rAnalyser.fftSize = 4096;
+				var bufferLength = lAnalyser.frequencyBinCount;
+				var lDataArray = new Uint8Array(bufferLength);
+				var rDataArray = new Uint8Array(bufferLength);
+				lAnalyser.getByteTimeDomainData(lDataArray);
+				rAnalyser.getByteTimeDomainData(rDataArray);
+
+				// draw an oscilloscope of the current audio source
+
+				function draw() {
+
+					lAnalyser.getByteTimeDomainData(lDataArray);
+					rAnalyser.getByteTimeDomainData(rDataArray);
+
+					canvasCtx.fillStyle = 'rgba(200, 200, 200, 0.1)';
+					canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+					//var maxDelay = ~~(bufferLength/2);
+
+					var correlation = crossCorrelation(rDataArray, lDataArray, bufferLength, maximumSamplesDelay);
+
+					var sliceWidth = canvas.width * 1.0 / (maximumSamplesDelay*2-1);
+					var x = 0;
+
+					var minCorrelation = correlation[-maximumSamplesDelay];
+					var maxCorrelation = correlation[-maximumSamplesDelay];
+
+					for (var i = -maximumSamplesDelay; i < maximumSamplesDelay; i++) {
+						if(correlation[i] > maxCorrelation){
+							maxCorrelation = correlation[i];
+						}
+						if(correlation[i] < minCorrelation){
+							minCorrelation = correlation[i];
+						}
+					}
+
+					var correlationSpan = maxCorrelation - minCorrelation;
+
+					//console.log(correlationSpan);
+					//console.log(correlation);
+
+					canvasCtx.lineWidth = Math.min(correlationSpan*10, 5);
+
+					canvasCtx.strokeStyle = 'rgba(0, 0, 255, '+Math.min(correlationSpan*3, 1)+')';
+
+					canvasCtx.beginPath();
+
+					for (var i = -maximumSamplesDelay; i < maximumSamplesDelay; i++) {
+
+						var corr = (correlation[i] - minCorrelation) / correlationSpan;
+
+						corr = Math.pow(corr, 8);
+						
+						var v = (1-corr);
+						var y = v * canvas.height;
+
+						if (i === -maximumSamplesDelay) {
+							canvasCtx.moveTo(x, y);
+						} else {
+							canvasCtx.lineTo(x, y);
+						}
+
+						x += sliceWidth;
+					}
+					
+					canvasCtx.stroke();
+					
+					/*canvasCtx.strokeStyle = 'rgb(0, 0, 0)';
+
+					canvasCtx.beginPath();
+
+					var sliceWidth = canvas.width * 1.0 / bufferLength;
+					var x = 0;
+
+					for (var i = 0; i < bufferLength; i++) {
+
+						var v = lDataArray[i] / 128.0;
+						var y = v * canvas.height / 2;
+
+						if (i === 0) {
+							canvasCtx.moveTo(x, y);
+						} else {
+							canvasCtx.lineTo(x, y);
+						}
+
+						x += sliceWidth;
+					}
+
+					canvasCtx.lineTo(canvas.width, canvas.height / 2);
+					canvasCtx.stroke();
+
+					canvasCtx.strokeStyle = 'rgb(255, 0, 0)';
+
+					canvasCtx.beginPath();
+
+					var sliceWidth = canvas.width * 1.0 / bufferLength;
+					var x = 0;
+
+					for (var i = 0; i < bufferLength; i++) {
+
+						var v = rDataArray[i] / 128.0;
+						var y = v * canvas.height / 2;
+
+						if (i === 0) {
+							canvasCtx.moveTo(x, y);
+						} else {
+							canvasCtx.lineTo(x, y);
+						}
+
+						x += sliceWidth;
+					}
+
+					canvasCtx.lineTo(canvas.width, canvas.height / 2);
+					canvasCtx.stroke();*/
+
+					drawVisual = requestAnimationFrame(draw);
+				};
+
+				draw();
+
+			});
+
+			function crossCorrelation(x, y, n, maxdelay){
+				var i,j;
+				var mx,my,sx,sy,sxy,denom,r;
+
+				/* Calculate the mean of the two series x[], y[] */
+				mx = 0;
+				my = 0;   
+				for (i=0;i<n;i++) {
+					mx += x[i];
+					my += y[i];
+				}
+				mx /= n;
+				my /= n;
+
+				/* Calculate the denominator */
+				sx = 0;
+				sy = 0;
+				for (i=0;i<n;i++) {
+					sx += (x[i] - mx) * (x[i] - mx);
+					sy += (y[i] - my) * (y[i] - my);
+				}
+				denom = Math.sqrt(sx*sy);
+
+				var correlation = [];
+
+				/* Calculate the correlation series */
+				for (delay=-maxdelay; delay<maxdelay; delay++) {
+					sxy = 0;
+					for (i=0; i<n; i++) {
+						j = i + delay;
+						
+						if (j < 0 || j >= n){
+							continue;
+						} else {
+							sxy += (x[i] - mx) * (y[j] - my);
+						}
+					}
+					correlation[delay] = sxy / denom;
+
+					/* r is the correlation coefficient at "delay" */
+
+				}
+
+				return correlation;
+			}
+		</script>
+	</body>		
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
